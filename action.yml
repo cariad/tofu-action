@@ -1,0 +1,156 @@
+name: Plan or apply with OpenTofu
+description: >-
+  Plans or applies an OpenTofu module, and comments OpenTofu's output on
+  the pull request when there is one.
+
+inputs:
+  directory:
+    description: >-
+      The module's directory, such as `infra`. The module must commit its
+      `.terraform.lock.hcl`.
+    required: true
+
+  mode:
+    description: "`plan` to plan the changes, or `apply` to apply them."
+    required: true
+
+  tofu-version:
+    description: The exact version of OpenTofu to run, such as `1.13.9`.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check the inputs
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+        MERGED: ${{ github.event.pull_request.merged }}
+        MODE: ${{ inputs.mode }}
+        OUTPUT: ${{ runner.temp }}/tofu-output.txt
+        PULL_REQUEST: ${{ github.event.pull_request.number }}
+        TOFU_VERSION: ${{ inputs.tofu-version }}
+
+      run: |
+        # Forget the output of any earlier run in this job, so it can't be
+        # reported as this run's.
+        rm -f "$OUTPUT"
+
+        [[ $DIRECTORY ]] || { echo "::error::The directory input is required."; exit 1; }
+        [[ $TOFU_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::The tofu-version input must be an exact version, such as 1.13.9."; exit 1; }
+
+        if [[ $MODE != plan && $MODE != apply ]]; then
+          echo "::error::The mode input must be plan or apply."
+          exit 1
+        fi
+
+        if [[ $MODE == apply && $PULL_REQUEST && $MERGED != true ]]; then
+          echo "::error::Pull request #$PULL_REQUEST isn't merged, so it can't be applied."
+          exit 1
+        fi
+
+    - name: Install OpenTofu
+      uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+      with:
+        tofu_version: ${{ inputs.tofu-version }}
+        tofu_wrapper: false
+
+    - name: Run OpenTofu
+      id: tofu
+      shell: bash
+      working-directory: ${{ inputs.directory }}
+      env:
+        MODE: ${{ inputs.mode }}
+        OUTPUT: ${{ runner.temp }}/tofu-output.txt
+        TF_IN_AUTOMATION: 1
+
+      run: |
+        # Debug logs can hold secrets, which GitHub doesn't hide in comments.
+        unset TF_LOG TF_LOG_CORE TF_LOG_PROVIDER
+
+        # If the job is cancelled or times out during "tofu init", GitHub
+        # interrupts this script but not "tofu init". Without this trap, the
+        # script would wait for "tofu init" to finish, then ignore the interrupt
+        # and run the plan or apply anyway.
+        trap 'exit 130' INT
+
+        tofu init -input=false -lockfile=readonly -no-color 2>&1 | tee "$OUTPUT"
+
+        if [[ $MODE == plan ]]; then
+          # Plans don't take the state lock, so read-only access to the state
+          # is enough. Their progress lines are just noise.
+          args=(plan -concise -lock=false)
+        else
+          args=(apply -auto-approve)
+        fi
+
+        # `exec` replaces this script with OpenTofu, so if the job is cancelled
+        # or times out during the plan or apply, GitHub interrupts OpenTofu
+        # itself. OpenTofu then finishes the changes it's making, saves the
+        # state and stops. If that takes longer than 7.5 seconds, GitHub
+        # interrupts it again and it stops at once.
+        exec tofu "${args[@]}" -input=false -no-color > >(tee "$OUTPUT") 2>&1
+
+    - name: Report the result
+      if: ${{ !cancelled() || inputs.mode == 'apply' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+        GH_TOKEN: ${{ github.token }}
+        MODE: ${{ inputs.mode }}
+        OUTCOME: ${{ steps.tofu.outcome }}
+        OUTPUT: ${{ runner.temp }}/tofu-output.txt
+        PULL_REQUEST: ${{ github.event.pull_request.number }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      run: |
+        case $MODE-$OUTCOME in
+          plan-success)    title="Plan for" ;;
+          plan-*)          title="Plan failed for" ;;
+          apply-success)   title="Applied" ;;
+          apply-cancelled) title="Apply cancelled for" ;;
+          apply-*)         title="Apply failed for" ;;
+          *)               title="OpenTofu failed for" ;;
+        esac
+
+        heading="## $title \`$DIRECTORY\`"
+        report=$RUNNER_TEMP/tofu-report.md
+
+        {
+          echo "$heading"
+
+          if [[ -s $OUTPUT ]]; then
+            # The fence must be longer than any run of backticks in the output.
+            fence='```'
+            while grep -qF -- "$fence" "$OUTPUT"; do fence+='`'; done
+
+            echo
+            echo "${fence}text"
+            # `$(<…)` drops the trailing newlines, so the fence gets its own line
+            # even if OpenTofu stopped mid-line.
+            printf '%s\n' "$(<"$OUTPUT")"
+            echo "$fence"
+          fi
+
+          if [[ $OUTCOME != success ]]; then
+            printf '\nSee the [workflow run](%s).\n' "$RUN_URL"
+          fi
+        } > "$report"
+
+        # Prints the report, or its heading and the note $2 when it's over $1
+        # bytes.
+        fit() {
+          if (( $(wc -c < "$report") > $1 )); then
+            printf '%s\n\n%s\n' "$heading" "$2"
+          else
+            cat "$report"
+          fi
+        }
+
+        fit 1048576 "The output is too long for the job summary. See the log." >> "$GITHUB_STEP_SUMMARY"
+
+        if [[ $PULL_REQUEST ]]; then
+          fit 65536 "The output is too long for a comment. See the [workflow run]($RUN_URL)." |
+            gh pr comment "$PULL_REQUEST" --repo "$GITHUB_REPOSITORY" --body-file -
+        fi
