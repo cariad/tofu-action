@@ -36,17 +36,23 @@ runs:
         # reported as this run's.
         rm -f "$OUTPUT"
 
-        [[ $DIRECTORY ]] || { echo "::error::The directory input is required."; exit 1; }
-        [[ $TOFU_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::The tofu-version input must be an exact version, such as 1.13.9."; exit 1; }
+        # Fails the step with the error $1, and saves the error as the output so
+        # the pull request's comment says why OpenTofu didn't run.
+        refuse() {
+          echo "::error::$1"
+          echo "$1" > "$OUTPUT"
+          exit 1
+        }
+
+        [[ $DIRECTORY ]] || refuse "The directory input is required."
+        [[ $TOFU_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || refuse "The tofu-version input must be an exact version, such as 1.13.9."
 
         if [[ $MODE != plan && $MODE != apply ]]; then
-          echo "::error::The mode input must be plan or apply."
-          exit 1
+          refuse "The mode input must be plan or apply."
         fi
 
         if [[ $MODE == apply && $PULL_REQUEST && $MERGED != true ]]; then
-          echo "::error::Pull request #$PULL_REQUEST isn't merged, so it can't be applied."
-          exit 1
+          refuse "Pull request #$PULL_REQUEST isn't merged, so it can't be applied."
         fi
 
     - name: Install OpenTofu
