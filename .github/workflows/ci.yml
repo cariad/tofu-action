@@ -1,0 +1,134 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions: {}
+
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+
+env:
+  MISE_LOCKED: 1
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise and the pinned tools
+        uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        with:
+          version: 2026.11.8
+
+      - name: Lint files against .editorconfig
+        run: mise run lint:editorconfig
+
+      - name: Lint Markdown files
+        run: mise run lint:markdown
+
+      - name: Lint TOML files
+        run: mise run lint:toml
+
+      - name: Audit GitHub Actions files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mise run lint:workflows
+
+  test:
+    env:
+      # Names the job in OpenTofu's output, so the checks can find the job's own
+      # comments.
+      TF_VAR_job: ${{ matrix.runner }}-${{ matrix.tofu }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    permissions:
+      pull-requests: write
+
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-26.04
+          - ubuntu-26.04-arm
+
+        # The latest release of each supported minor version.
+        tofu:
+          - 1.12.12
+          - 1.13.9
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Plan a module with changes
+        uses: $/
+        with:
+          directory: tests/changes
+          mode: plan
+          tofu-version: ${{ matrix.tofu }}
+
+      - name: Plan a module that fails
+        id: failure
+        continue-on-error: true
+        uses: $/
+        with:
+          directory: tests/failure
+          mode: plan
+          tofu-version: ${{ matrix.tofu }}
+
+      - name: Check that the plan failed
+        env:
+          OUTCOME: ${{ steps.failure.outcome }}
+        run: '[[ $OUTCOME == failure ]]'
+
+      # The action refuses to apply a pull request that isn't merged, so this
+      # fails on a pull request, and applies on a push to `main`.
+      - name: Apply the module with changes
+        id: apply
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        uses: $/
+        with:
+          directory: tests/changes
+          mode: apply
+          tofu-version: ${{ matrix.tofu }}
+
+      - name: Check the apply
+        env:
+          EVENT: ${{ github.event_name }}
+          OUTCOME: ${{ steps.apply.outcome }}
+        run: |
+          if [[ $EVENT == pull_request ]]; then
+            [[ $OUTCOME == failure ]]
+          else
+            [[ $OUTCOME == success ]]
+            grep -F "\"$TF_VAR_job\"" tests/changes/terraform.tfstate
+          fi
+
+      - name: Check the pull request's comments
+        if: github.event.pull_request.number
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST/comments" --jq '.[] | select(.user.login == "github-actions[bot]") | .body | @json' > comments.jsonl
+          grep -F "$TF_VAR_job" comments.jsonl > ours.jsonl || echo "No comments name $TF_VAR_job."
+          cat ours.jsonl
+          grep -F '"## Plan for `tests/changes`' ours.jsonl | grep -F 'Plan: 1 to add, 0 to change, 0 to destroy.'
+          grep -F '"## Plan failed for `tests/failure`' ours.jsonl | grep -F 'This plan fails on purpose for'
