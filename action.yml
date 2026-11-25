@@ -127,9 +127,10 @@ runs:
 
             echo
             echo "${fence}text"
-            # `$(<…)` drops the trailing newlines, so the fence gets its own line
-            # even if OpenTofu stopped mid-line.
-            printf '%s\n' "$(<"$OUTPUT")"
+            # The sed command deletes the empty lines that OpenTofu prints before
+            # its output. `$(…)` drops the trailing newlines, so the fence gets
+            # its own line even if OpenTofu stopped mid-line.
+            printf '%s\n' "$(sed '/./,$!d' "$OUTPUT")"
             echo "$fence"
           fi
 
