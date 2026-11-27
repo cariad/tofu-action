@@ -14,6 +14,7 @@ To plan the module in `infra` for every pull request that changes it:
 on:
   pull_request:
     paths:
+      - .opentofu-version
       - infra/**
 
 jobs:
