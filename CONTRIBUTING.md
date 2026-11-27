@@ -51,7 +51,9 @@ Code written with AI assistance is welcome.
 CI's `test` job runs the action on every runner and OpenTofu version in its matrix, against the modules in `tests`. They keep their state in local files, so they need no secrets.
 
 - It plans `tests/changes`, which adds a resource, and `tests/failure`, whose plan always fails.
-- It plans `tests/changes` with the version of OpenTofu in `.opentofu-version`, and checks that the action refuses a missing or unknown version, a version file that isn't an exact version, and both version inputs at once.
+- It makes `tests/changes` require the matrix's version of OpenTofu, so its plans and applies fail if the action installs any other version.
+- It plans `tests/changes` with the version in `.opentofu-version`. It then makes `.opentofu-version` hold a version that isn't exact, and plans with `tofu-version-file` and with `tofu-version`, to check that both win over `.opentofu-version`.
+- It checks that the action refuses a missing or unknown version, a version file that isn't an exact version, and both version inputs at once.
 - On a pull request, it checks that the action commented both plans. It also checks that applying `tests/changes` fails, as it must for a pull request that isn't merged, so every run comments "Apply failed" on the pull request too.
 - On a push to `main`, it applies `tests/changes`, and checks the state.
 
