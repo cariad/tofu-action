@@ -77,6 +77,49 @@ jobs:
         with:
           persist-credentials: false
 
+      # From here on, OpenTofu refuses to plan or apply tests/changes unless the
+      # action installed the matrix's version.
+      - name: Require the matrix's version of OpenTofu in tests/changes
+        env:
+          TOFU_VERSION: ${{ matrix.tofu }}
+        run: printf 'terraform {\n  required_version = "= %s"\n}\n' "$TOFU_VERSION" > tests/changes/version.tf
+
+      - name: Plan without a version of OpenTofu
+        id: unknown-version
+        continue-on-error: true
+        uses: $/
+        with:
+          directory: tests/changes
+          mode: plan
+
+      - name: Write the version of OpenTofu to .opentofu-version
+        env:
+          TOFU_VERSION: ${{ matrix.tofu }}
+        run: echo "$TOFU_VERSION" > .opentofu-version
+
+      - name: Plan with the version in .opentofu-version
+        uses: $/
+        with:
+          directory: tests/changes
+          mode: plan
+
+      # From here on, the action refuses to plan if it reads .opentofu-version,
+      # so these steps check that the version inputs win over it.
+      - name: Replace .opentofu-version with a version that isn't exact
+        run: cp tests/bad-version .opentofu-version
+
+      - name: Write the version of OpenTofu to custom-version
+        env:
+          TOFU_VERSION: ${{ matrix.tofu }}
+        run: echo "$TOFU_VERSION" > custom-version
+
+      - name: Plan with the version in custom-version
+        uses: $/
+        with:
+          directory: tests/changes
+          mode: plan
+          tofu-version-file: custom-version
+
       - name: Plan a module with changes
         uses: $/
         with:
@@ -97,6 +140,46 @@ jobs:
         env:
           OUTCOME: ${{ steps.failure.outcome }}
         run: '[[ $OUTCOME == failure ]]'
+
+      - name: Plan with a version file that doesn't exist
+        id: missing-version-file
+        continue-on-error: true
+        uses: $/
+        with:
+          directory: tests/changes
+          mode: plan
+          tofu-version-file: tests/missing-version
+
+      - name: Plan with a version file that isn't an exact version
+        id: bad-version-file
+        continue-on-error: true
+        uses: $/
+        with:
+          directory: tests/changes
+          mode: plan
+          tofu-version-file: tests/bad-version
+
+      - name: Plan with both a version and a version file
+        id: both-versions
+        continue-on-error: true
+        uses: $/
+        with:
+          directory: tests/changes
+          mode: plan
+          tofu-version: ${{ matrix.tofu }}
+          tofu-version-file: custom-version
+
+      - name: Check that the action refused the bad versions
+        env:
+          BAD_VERSION_FILE: ${{ steps.bad-version-file.outcome }}
+          BOTH_VERSIONS: ${{ steps.both-versions.outcome }}
+          MISSING_VERSION_FILE: ${{ steps.missing-version-file.outcome }}
+          UNKNOWN_VERSION: ${{ steps.unknown-version.outcome }}
+        run: |
+          [[ $UNKNOWN_VERSION == failure ]]
+          [[ $MISSING_VERSION_FILE == failure ]]
+          [[ $BAD_VERSION_FILE == failure ]]
+          [[ $BOTH_VERSIONS == failure ]]
 
       # The action refuses to apply a pull request that isn't merged, so this
       # fails on a pull request, and applies on a push to `main`.

@@ -14,6 +14,7 @@ To plan the module in `infra` for every pull request that changes it:
 on:
   pull_request:
     paths:
+      - .opentofu-version
       - infra/**
 
 jobs:
@@ -34,8 +35,9 @@ jobs:
         with:
           directory: infra
           mode: plan
-          tofu-version: 1.13.9
 ```
+
+Put the exact version of OpenTofu to run, such as `1.13.9`, in a `.opentofu-version` file in your repository's root, or set `tofu-version` to the version to use.
 
 Pass your backend's and providers' credentials in the step's `env`.
 
@@ -43,11 +45,14 @@ To apply a pull request when it's merged, use `mode: apply` in a workflow that r
 
 ## Inputs
 
-| Input          | Required | Description                                                                                |
-| -------------- | -------- | ------------------------------------------------------------------------------------------ |
-| `directory`    | Yes      | The module's directory, such as `infra`. The module must commit its `.terraform.lock.hcl`. |
-| `mode`         | Yes      | `plan` to plan the changes, or `apply` to apply them.                                      |
-| `tofu-version` | Yes      | The exact version of OpenTofu to run, such as `1.13.9`.                                    |
+| Input               | Required | Description                                                                                    |
+| ------------------- | -------- | ---------------------------------------------------------------------------------------------- |
+| `directory`         | Yes      | The module's directory, such as `infra`. The module must commit its `.terraform.lock.hcl`.     |
+| `mode`              | Yes      | `plan` to plan the changes, or `apply` to apply them.                                          |
+| `tofu-version`      | No       | The exact version of OpenTofu to run, such as `1.13.9`.                                        |
+| `tofu-version-file` | No       | The path of a file that holds the exact version of OpenTofu to run, relative to the workspace. |
+
+Set `tofu-version` or `tofu-version-file`, not both. If you set neither, the action reads the version from `.opentofu-version`, and fails if that file doesn't exist. The action intentionally never defaults to the latest release.
 
 ## Security
 
