@@ -15,13 +15,23 @@ inputs:
     required: true
 
   tofu-version:
-    description: The exact version of OpenTofu to run, such as `1.13.9`.
-    required: true
+    description: >-
+      The exact version of OpenTofu to run, such as `1.13.9`. You cannot set
+      both this and `tofu-version-file`.
+    required: false
+
+  tofu-version-file:
+    description: >-
+      The path of a file that holds the exact version of OpenTofu to run,
+      relative to the workspace. You cannot set both this and `tofu-version`. If
+      neither is set, the action reads `.opentofu-version`.
+    required: false
 
 runs:
   using: composite
   steps:
     - name: Check the inputs
+      id: inputs
       shell: bash
       env:
         DIRECTORY: ${{ inputs.directory }}
@@ -30,6 +40,7 @@ runs:
         OUTPUT: ${{ runner.temp }}/tofu-output.txt
         PULL_REQUEST: ${{ github.event.pull_request.number }}
         TOFU_VERSION: ${{ inputs.tofu-version }}
+        TOFU_VERSION_FILE: ${{ inputs.tofu-version-file }}
 
       run: |
         # Forget the output of any earlier run in this job, so it can't be
@@ -45,7 +56,28 @@ runs:
         }
 
         [[ $DIRECTORY ]] || refuse "The directory input is required."
-        [[ $TOFU_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || refuse "The tofu-version input must be an exact version, such as 1.13.9."
+
+        if [[ $TOFU_VERSION && $TOFU_VERSION_FILE ]]; then
+          refuse "Set either tofu-version or tofu-version-file, not both."
+        fi
+
+        if [[ $TOFU_VERSION ]]; then
+          [[ $TOFU_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || refuse "The tofu-version input must be an exact version, such as 1.13.9."
+        else
+          if [[ ! $TOFU_VERSION_FILE ]]; then
+            TOFU_VERSION_FILE=.opentofu-version
+            [[ -f $TOFU_VERSION_FILE ]] || refuse "The version of OpenTofu is unknown. Set tofu-version or tofu-version-file, or add a .opentofu-version file."
+          fi
+
+          [[ -f $TOFU_VERSION_FILE ]] || refuse "The file $TOFU_VERSION_FILE doesn't exist."
+
+          # The file must hold an exact version and nothing else, apart from the
+          # whitespace around it.
+          [[ $(< "$TOFU_VERSION_FILE") =~ ^[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$ ]] || refuse "The file $TOFU_VERSION_FILE must hold an exact version of OpenTofu, such as 1.13.9."
+          TOFU_VERSION=${BASH_REMATCH[1]}
+        fi
+
+        echo "tofu-version=$TOFU_VERSION" >> "$GITHUB_OUTPUT"
 
         if [[ $MODE != plan && $MODE != apply ]]; then
           refuse "The mode input must be plan or apply."
@@ -58,7 +90,9 @@ runs:
     - name: Install OpenTofu
       uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
       with:
-        tofu_version: ${{ inputs.tofu-version }}
+        # We intentionally don't pass tofu_version_file, because setup-opentofu installs
+        # the latest version when that file is missing. Don't do that!
+        tofu_version: ${{ steps.inputs.outputs.tofu-version }}
         tofu_wrapper: false
 
     - name: Run OpenTofu

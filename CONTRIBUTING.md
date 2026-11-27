@@ -51,6 +51,7 @@ Code written with AI assistance is welcome.
 CI's `test` job runs the action on every runner and OpenTofu version in its matrix, against the modules in `tests`. They keep their state in local files, so they need no secrets.
 
 - It plans `tests/changes`, which adds a resource, and `tests/failure`, whose plan always fails.
+- It plans `tests/changes` with the version of OpenTofu in `.opentofu-version`, and checks that the action refuses a missing or unknown version, a version file that isn't an exact version, and both version inputs at once.
 - On a pull request, it checks that the action commented both plans. It also checks that applying `tests/changes` fails, as it must for a pull request that isn't merged, so every run comments "Apply failed" on the pull request too.
 - On a push to `main`, it applies `tests/changes`, and checks the state.
 
@@ -62,7 +63,7 @@ A pull request from a fork gets a token that can't comment, so its `test` jobs f
 
 Dependabot bumps the actions in `action.yml` and `.github/workflows/`. Bump everything else by hand:
 
-- **OpenTofu:** the `tofu` matrix in the `test` job in `.github/workflows/ci.yml`, and `tofu-version` in the README's examples.
+- **OpenTofu:** the `tofu` matrix in the `test` job in `.github/workflows/ci.yml`, and the version in the README's example.
 - **mise:** `min_version` in `.config/mise.toml`, and `version` in the `jdx/mise-action` step in `.github/workflows/ci.yml`.
 - **Tools:** `.config/mise.toml`, then run `mise lock`.
 - **Runners:** the `runner` matrix in the `test` job and the `lint` job's `runs-on` in `.github/workflows/ci.yml`.
